@@ -9,6 +9,7 @@ from engine.data_manager import load_asset_data, compute_daily_volume_profiles, 
 from engine.strategies import StrategyRegistry
 from engine.execution_engine import process_trades
 from engine.prop_simulator import PROP_PRESETS, run_monte_carlo_prop_simulation, calculate_risk_sensitivity_matrix
+from engine.llm_parser import compile_user_prompt_to_setup
 
 # Page Configuration
 st.set_page_config(
@@ -43,34 +44,75 @@ st.markdown("""
 # ----------------- SIDEBAR CONTROLS -----------------
 st.sidebar.title("🛠️ Strategy & Prop Config")
 
+# AI Strategy Prompt Assistant
+if "ai_config" not in st.session_state:
+    st.session_state["ai_config"] = None
+
+with st.sidebar.expander("🤖 AI Strategy Assistant", expanded=True):
+    st.caption("Type any strategy setup in plain English. The AI parses parameters **without altering backtest methodology**.")
+    ai_prompt_text = st.text_area(
+        "Strategy Prompt",
+        placeholder="e.g. Value area reclaim 10am to 11:30am targeting opposite VA, only if NY open outside range, with 200 EMA filter on Topstep 50k",
+        height=85,
+        label_visibility="collapsed"
+    )
+    if st.button("✨ Apply AI Setup", use_container_width=True):
+        if ai_prompt_text.strip():
+            compiled = compile_user_prompt_to_setup(ai_prompt_text)
+            st.session_state["ai_config"] = compiled
+            st.rerun()
+
+ai_conf = st.session_state.get("ai_config")
+if ai_conf:
+    st.sidebar.success(f"**Compiled:** {ai_conf['explanation']}")
+    if st.sidebar.button("🔄 Reset Defaults", use_container_width=True):
+        st.session_state["ai_config"] = None
+        st.rerun()
+
 # 1. Asset & Timeframe
 st.sidebar.subheader("1. Asset & Data")
-selected_asset = st.sidebar.selectbox("Asset Symbol", options=["MNQ", "NQ", "BTC"], index=0)
-selected_tf = st.sidebar.selectbox("Timeframe", options=["15m", "5m"], index=0)
-contracts = st.sidebar.number_input("Contracts Traded", min_value=1, max_value=20, value=2, step=1)
+assets_list = ["MNQ", "NQ", "BTC"]
+default_asset_idx = assets_list.index(ai_conf["asset"]) if (ai_conf and ai_conf.get("asset") in assets_list) else 0
+selected_asset = st.sidebar.selectbox("Asset Symbol", options=assets_list, index=default_asset_idx)
+
+tfs_list = ["15m", "5m"]
+default_tf_idx = tfs_list.index(ai_conf["timeframe"]) if (ai_conf and ai_conf.get("timeframe") in tfs_list) else 0
+selected_tf = st.sidebar.selectbox("Timeframe", options=tfs_list, index=default_tf_idx)
+
+default_contracts = int(ai_conf["contracts"]) if ai_conf else 2
+contracts = st.sidebar.number_input("Contracts Traded", min_value=1, max_value=20, value=default_contracts, step=1)
 oos_ratio = st.sidebar.slider("Out-of-Sample (OOS) Holdout %", min_value=10, max_value=50, value=30, step=5) / 100.0
 
 # 2. Strategy Selection
 st.sidebar.subheader("2. Trading Strategy")
 available_strats = StrategyRegistry.list_available()
-selected_strat = st.sidebar.selectbox("Strategy Setup", options=available_strats, index=0)
+default_strat_idx = available_strats.index(ai_conf["strategy"]) if (ai_conf and ai_conf.get("strategy") in available_strats) else 0
+selected_strat = st.sidebar.selectbox("Strategy Setup", options=available_strats, index=default_strat_idx)
 
 strat_params = {}
+ai_p = ai_conf.get("params", {}) if ai_conf else {}
+
 if selected_strat == "Value Area Reclaim":
     col_t1, col_t2 = st.sidebar.columns(2)
     with col_t1:
-        strat_params["start_time"] = st.text_input("Start Time (ET)", value="10:00")
+        strat_params["start_time"] = st.text_input("Start Time (ET)", value=ai_p.get("start_time", "10:00"))
     with col_t2:
-        strat_params["end_time"] = st.text_input("End Time (ET)", value="12:00")
-    strat_params["target_mode"] = st.sidebar.selectbox("Target Mode", options=["opposite_va", "poc", "scale_50_50"], index=0, format_func=lambda x: {
+        strat_params["end_time"] = st.text_input("End Time (ET)", value=ai_p.get("end_time", "12:00"))
+        
+    target_modes = ["opposite_va", "poc", "scale_50_50"]
+    target_idx = target_modes.index(ai_p.get("target_mode", "opposite_va")) if ai_p.get("target_mode") in target_modes else 0
+    strat_params["target_mode"] = st.sidebar.selectbox("Target Mode", options=target_modes, index=target_idx, format_func=lambda x: {
         "opposite_va": "Opposite VA (Full Rotation)",
         "poc": "POC Only (Conservative)",
         "scale_50_50": "50% at POC + 50% at VAH/VAL"
     }[x])
+    
+    ny_opts = ["none", "outside_range", "outside_va"]
+    ny_idx = ny_opts.index(ai_p.get("ny_open_filter", "none")) if ai_p.get("ny_open_filter") in ny_opts else 0
     strat_params["ny_open_filter"] = st.sidebar.selectbox(
         "NY Open Context (09:30 ET)",
-        options=["none", "outside_range", "outside_va"],
-        index=0,
+        options=ny_opts,
+        index=ny_idx,
         format_func=lambda x: {
             "none": "Any Open Context",
             "outside_range": "Open Outside Prior Range (Gap)",
@@ -78,10 +120,13 @@ if selected_strat == "Value Area Reclaim":
         }[x],
         help="Only triggers setups if 09:30 ET Open was outside yesterday's Range or Value Area."
     )
+    
+    trend_opts = ["none", "daily_ema50", "daily_ema200"]
+    trend_idx = trend_opts.index(ai_p.get("trend_filter", "none")) if ai_p.get("trend_filter") in trend_opts else 0
     strat_params["trend_filter"] = st.sidebar.selectbox(
         "Higher Timeframe Trend Filter",
-        options=["none", "daily_ema50", "daily_ema200"],
-        index=0,
+        options=trend_opts,
+        index=trend_idx,
         format_func=lambda x: {
             "none": "No Trend Filter (Both Long & Short)",
             "daily_ema50": "Daily 50 EMA (Long > 50 EMA, Short < 50 EMA)",
@@ -89,28 +134,32 @@ if selected_strat == "Value Area Reclaim":
         }[x],
         help="Filters out counter-trend trades relative to prior day's completed Daily EMA."
     )
-    strat_params["stop_loss_buffer_atr"] = st.sidebar.slider("Stop Loss ATR Buffer", 0.0, 2.0, 0.5, 0.25)
-    strat_params["require_vol_surge"] = st.sidebar.checkbox("Require Volume Surge (> SMA)", value=False)
-    strat_params["eod_exit_time"] = st.sidebar.text_input("EOD Flat Time (ET)", value="15:55")
+    strat_params["stop_loss_buffer_atr"] = st.sidebar.slider("Stop Loss ATR Buffer", 0.0, 2.0, float(ai_p.get("stop_loss_buffer_atr", 0.5)), 0.25)
+    strat_params["require_vol_surge"] = st.sidebar.checkbox("Require Volume Surge (> SMA)", value=bool(ai_p.get("require_vol_surge", False)))
+    strat_params["eod_exit_time"] = st.sidebar.text_input("EOD Flat Time (ET)", value=ai_p.get("eod_exit_time", "15:55"))
 
 elif selected_strat == "Opening Range Breakout (ORB)":
     col_o1, col_o2 = st.sidebar.columns(2)
     with col_o1:
-        strat_params["orb_start"] = st.text_input("ORB Start (ET)", value="09:30")
+        strat_params["orb_start"] = st.text_input("ORB Start (ET)", value=ai_p.get("orb_start", "09:30"))
     with col_o2:
-        strat_params["orb_end"] = st.text_input("ORB End (ET)", value="10:00")
-    strat_params["trade_end"] = st.sidebar.text_input("Entry Window End (ET)", value="12:00")
-    strat_params["r_target_mult"] = st.sidebar.slider("Target (R-Multiple)", 1.0, 5.0, 2.0, 0.5)
-    strat_params["eod_exit_time"] = st.sidebar.text_input("EOD Flat Time (ET)", value="15:55")
+        strat_params["orb_end"] = st.text_input("ORB End (ET)", value=ai_p.get("orb_end", "10:00"))
+    strat_params["trade_end"] = st.sidebar.text_input("Entry Window End (ET)", value=ai_p.get("trade_end", "12:00"))
+    strat_params["r_target_mult"] = st.sidebar.slider("Target (R-Multiple)", 1.0, 5.0, float(ai_p.get("r_target_mult", 2.0)), 0.5)
+    strat_params["eod_exit_time"] = st.sidebar.text_input("EOD Flat Time (ET)", value=ai_p.get("eod_exit_time", "15:55"))
 
 # 3. Prop Firm Settings
 st.sidebar.subheader("3. Prop Firm Optimization")
-selected_preset = st.sidebar.selectbox("Prop Preset", options=list(PROP_PRESETS.keys()), index=0)
+prop_opts = list(PROP_PRESETS.keys())
+prop_idx = prop_opts.index(ai_conf["prop_preset"]) if (ai_conf and ai_conf.get("prop_preset") in prop_opts) else 0
+selected_preset = st.sidebar.selectbox("Prop Preset", options=prop_opts, index=prop_idx)
 base_rules = PROP_PRESETS[selected_preset].copy()
 
 # Override controls
-custom_eval_risk = st.sidebar.slider("Eval Risk Multiplier", 0.25, 3.0, 1.0, 0.25, help="Scale trade sizing in evaluation phase to balance speed vs survival")
-custom_funded_risk = st.sidebar.slider("Funded Risk Multiplier", 0.10, 2.0, 0.5, 0.10, help="Scale trade sizing down once funded to protect the drawdown buffer")
+def_eval_r = float(ai_conf["eval_risk"]) if ai_conf else 1.0
+def_funded_r = float(ai_conf["funded_risk"]) if ai_conf else 0.5
+custom_eval_risk = st.sidebar.slider("Eval Risk Multiplier", 0.25, 3.0, def_eval_r, 0.25, help="Scale trade sizing in evaluation phase to balance speed vs survival")
+custom_funded_risk = st.sidebar.slider("Funded Risk Multiplier", 0.10, 2.0, def_funded_r, 0.10, help="Scale trade sizing down once funded to protect the drawdown buffer")
 consistency_toggle = st.sidebar.checkbox("Enforce Consistency Rule (Max 50% on 1 Day)", value=True)
 
 # ----------------- MAIN EXECUTION & CACHING -----------------
@@ -123,6 +172,8 @@ def get_cached_profiles(df):
     return compute_daily_volume_profiles(df)
 
 st.title("🚀 Institutional Backtesting & Prop Firm Engine")
+if ai_conf:
+    st.info(f"🤖 **AI Compiled Setup Active:** {ai_conf['explanation']}\n\n*Security notice: Backtest methodology, slippage, and prop firm rules are strictly protected and immutable.*")
 st.caption(f"Testing **{selected_strat}** on **{selected_asset}** with **{selected_preset}** Evaluation Rules")
 
 with st.spinner("Loading dataset and volume profiles..."):
