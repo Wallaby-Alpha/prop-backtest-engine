@@ -70,7 +70,7 @@ if ai_conf:
         st.rerun()
 
 # 1. Asset & Timeframe
-st.sidebar.subheader("1. Asset & Data")
+st.sidebar.subheader("1. Asset & Position Sizing")
 assets_list = ["MNQ", "NQ", "BTC"]
 default_asset_idx = assets_list.index(ai_conf["asset"]) if (ai_conf and ai_conf.get("asset") in assets_list) else 0
 selected_asset = st.sidebar.selectbox("Asset Symbol", options=assets_list, index=default_asset_idx)
@@ -79,8 +79,28 @@ tfs_list = ["15m", "5m"]
 default_tf_idx = tfs_list.index(ai_conf["timeframe"]) if (ai_conf and ai_conf.get("timeframe") in tfs_list) else 0
 selected_tf = st.sidebar.selectbox("Timeframe", options=tfs_list, index=default_tf_idx)
 
-default_contracts = int(ai_conf["contracts"]) if ai_conf else 2
-contracts = st.sidebar.number_input("Contracts Traded", min_value=1, max_value=20, value=default_contracts, step=1)
+sizing_mode = st.sidebar.radio(
+    "Position Sizing Mode",
+    ["Concrete Dollar Risk ($)", "Fixed Contracts"],
+    index=0,
+    help="Concrete Dollar Risk sizes contracts dynamically based on stop loss width so every trade risks an exact dollar amount."
+)
+
+if sizing_mode == "Concrete Dollar Risk ($)":
+    dollar_risk_val = st.sidebar.number_input(
+        "Target Risk per Trade ($)",
+        min_value=25.0,
+        max_value=2000.0,
+        value=250.0,
+        step=25.0,
+        help="Exact dollar risk per trade. E.g., $250 on a $50k account with $2,000 max drawdown represents risking 12.5% of your drawdown buffer."
+    )
+    contracts_val = 2
+else:
+    dollar_risk_val = 250.0
+    default_contracts = int(ai_conf["contracts"]) if ai_conf else 2
+    contracts_val = st.sidebar.number_input("Contracts Traded", min_value=1, max_value=20, value=default_contracts, step=1)
+
 oos_ratio = st.sidebar.slider("Out-of-Sample (OOS) Holdout %", min_value=10, max_value=50, value=30, step=5) / 100.0
 
 # 2. Strategy Selection
@@ -162,11 +182,34 @@ prop_idx = prop_opts.index(ai_conf["prop_preset"]) if (ai_conf and ai_conf.get("
 selected_preset = st.sidebar.selectbox("Prop Preset", options=prop_opts, index=prop_idx)
 base_rules = PROP_PRESETS[selected_preset].copy()
 
-# Override controls
-def_eval_r = float(ai_conf["eval_risk"]) if ai_conf else 1.0
-def_funded_r = float(ai_conf["funded_risk"]) if ai_conf else 0.5
-custom_eval_risk = st.sidebar.slider("Eval Risk Multiplier", 0.25, 3.0, def_eval_r, 0.25, help="Scale trade sizing in evaluation phase to balance speed vs survival")
-custom_funded_risk = st.sidebar.slider("Funded Risk Multiplier", 0.10, 2.0, def_funded_r, 0.10, help="Scale trade sizing down once funded to protect the drawdown buffer")
+# Concrete Risk Settings
+if sizing_mode == "Concrete Dollar Risk ($)":
+    eval_dollar_risk = st.sidebar.number_input(
+        "Evaluation Risk ($/Trade)",
+        min_value=25.0,
+        max_value=2000.0,
+        value=dollar_risk_val,
+        step=25.0,
+        help=f"Concrete dollars risked per trade during Evaluation. Topstep $50k max DD is ${base_rules['max_drawdown']:,}."
+    )
+    funded_dollar_risk = st.sidebar.number_input(
+        "Funded Stage Risk ($/Trade)",
+        min_value=25.0,
+        max_value=2000.0,
+        value=max(25.0, eval_dollar_risk * 0.5),
+        step=25.0,
+        help="Concrete dollars risked once Funded. Institutional traders cut risk in half to prevent blowing the payout buffer."
+    )
+    custom_eval_risk = eval_dollar_risk / dollar_risk_val
+    custom_funded_risk = funded_dollar_risk / dollar_risk_val
+else:
+    def_eval_r = float(ai_conf["eval_risk"]) if ai_conf else 1.0
+    def_funded_r = float(ai_conf["funded_risk"]) if ai_conf else 0.5
+    custom_eval_risk = st.sidebar.slider("Eval Risk Multiplier", 0.25, 3.0, def_eval_r, 0.25, help="Scale trade sizing in evaluation phase")
+    custom_funded_risk = st.sidebar.slider("Funded Risk Multiplier", 0.10, 2.0, def_funded_r, 0.10, help="Scale trade sizing down once funded")
+    eval_dollar_risk = dollar_risk_val * custom_eval_risk
+    funded_dollar_risk = dollar_risk_val * custom_funded_risk
+
 consistency_toggle = st.sidebar.checkbox("Enforce Consistency Rule (Max 50% on 1 Day)", value=True)
 
 # ----------------- MAIN EXECUTION & CACHING -----------------
@@ -196,7 +239,9 @@ trades_df, metrics = process_trades(
     raw_signals,
     spec,
     oos_split_date=split_date,
-    contracts=contracts
+    sizing_mode="dollar_risk" if sizing_mode == "Concrete Dollar Risk ($)" else "fixed_contracts",
+    contracts=contracts_val,
+    dollar_risk_per_trade=dollar_risk_val
 )
 
 # ----------------- TABS DISPLAY -----------------
@@ -294,32 +339,72 @@ with tab2:
     st.write(f"Testing ability to hit **${base_rules['profit_target']:,} Profit Target** before hitting **${base_rules['max_drawdown']:,} {base_rules['dd_type']} Drawdown** or **${base_rules['daily_loss_limit']:,} Daily Loss Limit**.")
     
     if len(trades_df) > 10:
+        all_sessions = sorted(list(df['session_date_et'].unique()))
         sim_res = run_monte_carlo_prop_simulation(
             trades_df,
             base_rules,
             eval_risk_scaler=custom_eval_risk,
             funded_risk_scaler=custom_funded_risk,
             num_simulations=1000,
-            consistency_threshold=0.50 if consistency_toggle else None
+            consistency_threshold=0.50 if consistency_toggle else None,
+            all_sessions=all_sessions
         )
         
+        # Sizing summary banner
+        if sizing_mode == "Concrete Dollar Risk ($)":
+            st.info(f"💵 **Concrete Sizing Active:** Evaluation Risk = **${eval_dollar_risk:,.0f}/trade** | Funded Risk = **${funded_dollar_risk:,.0f}/trade** | Contracts dynamically sized from stop loss width.")
+        else:
+            st.info(f"📊 **Contract Sizing Active:** Trading **{contracts_val} Contracts** fixed.")
+            
         col_p1, col_p2, col_p3, col_p4 = st.columns(4)
         with col_p1:
-            st.metric("Evaluation Pass Rate", f"{sim_res['pass_rate_pct']:.1f}%")
+            st.metric(
+                "Realistic 60-Day Pass Rate",
+                f"{sim_res['realistic_challenge_pass_rate_pct']:.1f}%",
+                help="Probability of hitting profit target within a realistic 60 market session window (~3 calendar months) accounting for actual trade frequency."
+            )
         with col_p2:
+            st.metric(
+                "Open-Ended Pass Rate",
+                f"{sim_res['unbounded_pass_rate_pct']:.1f}%",
+                help="Pass rate if account subscription is maintained indefinitely until target or drawdown breach."
+            )
+        with col_p3:
+            st.metric(
+                "Trade Cadence",
+                f"{sim_res['trades_per_month']:.1f} / mo",
+                help=f"Average trade frequency: 1 trade every {sim_res['cadence_days_per_trade']:.1f} trading sessions."
+            )
+        with col_p4:
+            st.metric(
+                "Est. Subscription Cost",
+                f"${sim_res['est_subscription_cost_usd']:,.0f}",
+                help=f"Estimated {sim_res['est_calendar_months_to_pass']:.1f} calendar months of renewals at ${base_rules.get('challenge_fee', 49):.0f}/mo to accumulate required trades."
+            )
+            
+        if sim_res['trades_per_month'] < 4.0:
+            st.warning(
+                f"⚠️ **Low Trade Frequency Notice:** This setup only fires **{sim_res['trades_per_month']:.1f} times per month** "
+                f"(1 trade every {sim_res['cadence_days_per_trade']:.1f} market days). "
+                f"While individual trades may be profitable, passing an evaluation requires ~{sim_res['median_days_to_pass']:.0f} trades. "
+                f"In a standard 60-day challenge window, you will only see ~{sim_res['trades_per_month']*3:.0f} trades, explaining why realistic pass rate is low unless renewed over {sim_res['est_calendar_months_to_pass']:.1f} months."
+            )
+            
+        col_sub1, col_sub2, col_sub3 = st.columns(3)
+        with col_sub1:
+            st.metric("Blown by Max Trailing DD", f"{sim_res['blown_max_dd_pct']:.1f}%")
+        with col_sub2:
             if base_rules.get("dll_type") == "soft":
                 st.metric("Daily Lockouts Hit (%)", f"{sim_res.get('soft_lockout_pct', 0.0):.1f}%", help="Soft daily lockout reached: positions flattened, account survives to next session")
             else:
                 st.metric("Blown by Daily Loss Limit", f"{sim_res['blown_dll_pct']:.1f}%")
-        with col_p3:
-            st.metric("Blown by Max Trailing DD", f"{sim_res['blown_max_dd_pct']:.1f}%")
-        with col_p4:
-            st.metric("Median Days to Pass", f"{sim_res['median_days_to_pass']:.0f} trading days")
+        with col_sub3:
+            st.metric("Median Trades to Pass", f"{sim_res['median_days_to_pass']:.0f} trades")
             
         if base_rules.get("dll_type") == "soft":
             st.caption("ℹ️ **Rule Notice:** Topstep Daily Loss Limit ($1,000) is enforced as a **Soft Breach / Daily Lockout**. Position is liquidated and trading resumes next session. Account is only terminated if cumulative trailing drawdown ($2,000) is breached.")
             
-        # Distribution of Days to Pass
+        # Distribution of Trades to Pass
         eval_df = sim_res['eval_df']
         passed_trials = eval_df[eval_df['status'] == 'PASSED']
         
@@ -328,8 +413,8 @@ with tab2:
                 passed_trials,
                 x="days",
                 nbins=30,
-                title="Distribution of Trading Days Required to Pass Evaluation",
-                labels={"days": "Trading Days to Pass"},
+                title="Distribution of Trades Required to Pass Evaluation",
+                labels={"days": "Trades to Pass"},
                 template="plotly_dark",
                 color_discrete_sequence=['#00c087']
             )
@@ -337,8 +422,8 @@ with tab2:
             st.plotly_chart(fig_hist, use_container_width=True)
             
         # Risk Sensitivity Matrix
-        st.markdown("### 🔬 Sizing Sensitivity: How Risk Scaler Affects Pass Rate")
-        sens_df = calculate_risk_sensitivity_matrix(trades_df, base_rules)
+        st.markdown("### 🔬 Sizing Sensitivity: How Concrete Risk Affects Pass Rate & Cost")
+        sens_df = calculate_risk_sensitivity_matrix(trades_df, base_rules, all_sessions=all_sessions)
         st.dataframe(sens_df, use_container_width=True)
 
 # ================= TAB 3: FUNDED STAGE & PAYOUTS =================
@@ -357,15 +442,16 @@ with tab3:
             st.metric("Avg Payout Collected", f"${sim_res['avg_payouts_usd']:,.2f}")
         with col_f3:
             ev_color = "normal" if sim_res['net_ev_per_challenge'] > 0 else "inverse"
-            st.metric("Net EV per Evaluation Purchased", f"${sim_res['net_ev_per_challenge']:+,.2f}", help="Avg Payout minus Challenge Cost ($49)")
+            st.metric("Net EV per Evaluation Purchased", f"${sim_res['net_ev_per_challenge']:+,.2f}", help="Avg Payout minus Challenge Cost")
             
-        st.info(f"💡 **Funded Risk Scaling Strategy:** You are currently risking **{custom_eval_risk:.2f}x** during Evaluation and scaling down to **{custom_funded_risk:.2f}x** during the Funded stage. Lowering risk in funded mode significantly prolongs account survival.")
+        st.info(f"💡 **Funded Risk Scaling Strategy:** You are currently risking **${eval_dollar_risk:,.0f}** during Evaluation and scaling down to **${funded_dollar_risk:,.0f}** during the Funded stage. Lowering risk in funded mode significantly prolongs account survival.")
 
 # ================= TAB 4: TRADE LOG =================
 with tab4:
     st.subheader("📜 Detailed Trade Log")
     if len(trades_df) > 0:
-        display_cols = ['entry_time', 'exit_time', 'side', 'entry_price', 'exit_price', 'net_pts', 'net_pnl', 'sample_type', 'exit_reason']
-        st.dataframe(trades_df[display_cols].sort_values('entry_time', ascending=False), use_container_width=True)
+        display_cols = ['entry_time', 'exit_time', 'side', 'entry_price', 'exit_price', 'contracts', 'intended_risk_usd', 'actual_risk_usd', 'net_pts', 'net_pnl', 'sample_type', 'exit_reason']
+        available_cols = [c for c in display_cols if c in trades_df.columns]
+        st.dataframe(trades_df[available_cols].sort_values('entry_time', ascending=False), use_container_width=True)
     else:
         st.warning("No trades generated with the selected parameters.")

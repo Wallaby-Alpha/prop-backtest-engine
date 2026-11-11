@@ -128,6 +128,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                 signals.append({
                     'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                     'entry_price': entry_price, 'exit_price': blended_exit,
+                    'stop_price': init_stop_price,
                     'side': 'LONG' if pos_side == 1 else 'SHORT',
                     'bars': held, 'exit_reason': 'EOD_FLAT',
                     'date': d
@@ -143,6 +144,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                     signals.append({
                         'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                         'entry_price': entry_price, 'exit_price': blended_exit,
+                        'stop_price': init_stop_price,
                         'side': 'LONG', 'bars': held, 'exit_reason': reason,
                         'date': d
                     })
@@ -152,6 +154,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                     signals.append({
                         'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                         'entry_price': entry_price, 'exit_price': tp1_price,
+                        'stop_price': init_stop_price,
                         'side': 'LONG', 'bars': held, 'exit_reason': 'TARGET_POC',
                         'date': d
                     })
@@ -160,6 +163,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                     signals.append({
                         'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                         'entry_price': entry_price, 'exit_price': tp2_price,
+                        'stop_price': init_stop_price,
                         'side': 'LONG', 'bars': held, 'exit_reason': 'TARGET_VAH',
                         'date': d
                     })
@@ -173,6 +177,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                         signals.append({
                             'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                             'entry_price': entry_price, 'exit_price': (tp1_price + tp2_price) / 2.0,
+                            'stop_price': init_stop_price,
                             'side': 'LONG', 'bars': held, 'exit_reason': 'TARGET_SCALE_FULL',
                             'date': d
                         })
@@ -185,6 +190,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                     signals.append({
                         'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                         'entry_price': entry_price, 'exit_price': blended_exit,
+                        'stop_price': init_stop_price,
                         'side': 'SHORT', 'bars': held, 'exit_reason': reason,
                         'date': d
                     })
@@ -193,6 +199,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                     signals.append({
                         'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                         'entry_price': entry_price, 'exit_price': tp1_price,
+                        'stop_price': init_stop_price,
                         'side': 'SHORT', 'bars': held, 'exit_reason': 'TARGET_POC',
                         'date': d
                     })
@@ -201,6 +208,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                     signals.append({
                         'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                         'entry_price': entry_price, 'exit_price': tp2_price,
+                        'stop_price': init_stop_price,
                         'side': 'SHORT', 'bars': held, 'exit_reason': 'TARGET_VAL',
                         'date': d
                     })
@@ -213,6 +221,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                         signals.append({
                             'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                             'entry_price': entry_price, 'exit_price': (tp1_price + tp2_price) / 2.0,
+                            'stop_price': init_stop_price,
                             'side': 'SHORT', 'bars': held, 'exit_reason': 'TARGET_SCALE_FULL',
                             'date': d
                         })
@@ -247,6 +256,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                 pos_side = 1
                 entry_price = c
                 stop_price = probe_low - stop_buffer_atr * a
+                init_stop_price = stop_price
                 tp1_price = poc
                 tp2_price = vah
                 entry_idx = i
@@ -266,6 +276,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                 pos_side = -1
                 entry_price = c
                 stop_price = probe_high + stop_buffer_atr * a
+                init_stop_price = stop_price
                 tp1_price = poc
                 tp2_price = val
                 entry_idx = i

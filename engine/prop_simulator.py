@@ -264,39 +264,61 @@ def run_monte_carlo_prop_simulation(
     eval_risk_scaler=1.0,
     funded_risk_scaler=0.5,
     num_simulations=1000,
-    consistency_threshold=0.50
+    consistency_threshold=0.50,
+    all_sessions=None,
+    challenge_window_sessions=60 # 60 trading days = approx 3 calendar months
 ):
     """
-    Runs multi-path Monte Carlo simulation across historical daily P&Ls.
-    Returns:
-      - Pass Rate %
-      - Fail Rate % (DD breach vs DLL breach)
-      - Median Days to Pass
-      - Payout Rate % (probability of reaching >= 1 payout)
-      - Expected Payouts ($)
-      - Net Expected Value per Evaluation Challenge ($)
+    Runs multi-path Monte Carlo simulation with calendar-accurate cadence.
+    Distinguishes between:
+      1. Realistic Challenge Window Pass Rate (e.g. 60 market days / 3 months)
+      2. Unbounded Pass Rate (if renewed indefinitely)
+      3. Trade Frequency (trades per month & days per trade)
+      4. Estimated Subscription Fees needed to pass
     """
     if len(trades_df) == 0:
         return {}
         
-    # Aggregate trades by date to get realistic daily P&L sequence
     daily_pnls = trades_df.groupby('date')['net_pnl'].sum().values
-    if len(daily_pnls) < 10:
+    if len(daily_pnls) < 5:
         return {}
         
     np.random.seed(42)
     n_days = len(daily_pnls)
     
+    # Calendar Session Alignment
+    if all_sessions is not None and len(all_sessions) > 0:
+        full_daily_series = trades_df.groupby('date')['net_pnl'].sum().reindex(all_sessions, fill_value=0.0).values
+        total_market_sessions = len(all_sessions)
+    else:
+        full_daily_series = daily_pnls
+        total_market_sessions = max(len(daily_pnls), 750)
+        
+    trades_count = len(trades_df)
+    trades_per_month = (trades_count / max(1, total_market_sessions)) * 21.0 # 21 sessions per month
+    cadence_days_per_trade = total_market_sessions / max(1, trades_count)
+    
     eval_results = []
     funded_results = []
+    window_eval_results = []
     
     for _ in range(num_simulations):
-        # Sample with block replacement / random start index
-        start_idx = np.random.randint(0, max(1, n_days - 30))
-        # Draw a synthetic or shuffled block of trading days
+        # 1. Realistic Challenge Window Simulation (sample contiguous 60 market sessions)
+        if len(full_daily_series) > challenge_window_sessions:
+            w_start = np.random.randint(0, len(full_daily_series) - challenge_window_sessions)
+            window_days = full_daily_series[w_start : w_start + challenge_window_sessions]
+            res_w = simulate_prop_evaluation_single_path(
+                window_days,
+                rules,
+                risk_scaler=eval_risk_scaler,
+                consistency_threshold=consistency_threshold
+            )
+            window_eval_results.append(res_w)
+        else:
+            window_eval_results.append({'status': 'ONGOING', 'reason': 'SHORT_DATA'})
+            
+        # 2. Unbounded Active-Days Simulation
         sim_days = np.random.choice(daily_pnls, size=min(120, n_days), replace=True)
-        
-        # 1. Evaluation Simulation
         res_eval = simulate_prop_evaluation_single_path(
             sim_days,
             rules,
@@ -305,7 +327,7 @@ def run_monte_carlo_prop_simulation(
         )
         eval_results.append(res_eval)
         
-        # 2. If Passed, Simulate Funded Stage
+        # 3. Funded Stage Simulation
         if res_eval['status'] == 'PASSED':
             funded_days = np.random.choice(daily_pnls, size=200, replace=True)
             res_funded = simulate_funded_stage(
@@ -319,63 +341,82 @@ def run_monte_carlo_prop_simulation(
             
     eval_df = pd.DataFrame(eval_results)
     funded_df = pd.DataFrame(funded_results)
+    window_df = pd.DataFrame(window_eval_results)
     
+    # Metrics
     passed_mask = eval_df['status'] == 'PASSED'
-    pass_rate = passed_mask.mean() * 100.0
+    unbounded_pass_rate = passed_mask.mean() * 100.0
+    
+    window_pass_mask = window_df['status'] == 'PASSED'
+    realistic_challenge_pass_rate = window_pass_mask.mean() * 100.0
     
     blown_dd_rate = (eval_df['reason'] == 'MAX_DRAWDOWN').mean() * 100.0
     blown_dll_rate = (eval_df['reason'] == 'DAILY_LOSS_LIMIT').mean() * 100.0
     soft_lockout_rate = (eval_df['soft_lockouts'] > 0).mean() * 100.0 if 'soft_lockouts' in eval_df.columns else 0.0
     
     passed_days = eval_df.loc[passed_mask, 'days']
-    median_days_to_pass = passed_days.median() if len(passed_days) > 0 else 0
-    p90_days_to_pass = passed_days.quantile(0.90) if len(passed_days) > 0 else 0
+    median_trades_to_pass = passed_days.median() if len(passed_days) > 0 else 0
+    p90_trades_to_pass = passed_days.quantile(0.90) if len(passed_days) > 0 else 0
+    
+    # Real-world calendar time & cost modeling
+    est_calendar_months_to_pass = median_trades_to_pass / max(0.05, trades_per_month)
+    fee = rules.get("challenge_fee", 49.0)
+    est_subscription_cost = max(fee, est_calendar_months_to_pass * fee)
     
     payout_mask = funded_df['payouts_count'] > 0
-    payout_rate = payout_mask.mean() * 100.0 # of all challenges
+    payout_rate = payout_mask.mean() * 100.0
     funded_payout_rate = (funded_df.loc[passed_mask, 'payouts_count'] > 0).mean() * 100.0 if passed_mask.sum() > 0 else 0
     
     avg_total_payout = funded_df['total_payouts_usd'].mean()
-    fee = rules.get("challenge_fee", 49.0)
-    net_ev_per_challenge = avg_total_payout - fee
+    net_ev_per_challenge = avg_total_payout - est_subscription_cost
     
     return {
         'total_simulations': num_simulations,
-        'pass_rate_pct': pass_rate,
+        'unbounded_pass_rate_pct': unbounded_pass_rate,
+        'realistic_challenge_pass_rate_pct': realistic_challenge_pass_rate,
+        'trades_per_month': trades_per_month,
+        'cadence_days_per_trade': cadence_days_per_trade,
+        'est_calendar_months_to_pass': est_calendar_months_to_pass,
+        'est_subscription_cost_usd': est_subscription_cost,
         'blown_max_dd_pct': blown_dd_rate,
         'blown_dll_pct': blown_dll_rate,
         'soft_lockout_pct': soft_lockout_rate,
-        'median_days_to_pass': median_days_to_pass,
-        'p90_days_to_pass': p90_days_to_pass,
+        'median_days_to_pass': median_trades_to_pass,
+        'p90_days_to_pass': p90_trades_to_pass,
         'payout_rate_overall_pct': payout_rate,
         'funded_stage_payout_rate_pct': funded_payout_rate,
         'avg_payouts_usd': avg_total_payout,
         'challenge_fee': fee,
         'net_ev_per_challenge': net_ev_per_challenge,
         'eval_df': eval_df,
-        'funded_df': funded_df
+        'funded_df': funded_df,
+        'window_df': window_df
     }
 
-def calculate_risk_sensitivity_matrix(trades_df, rules, risk_multipliers=[0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0]):
+def calculate_risk_sensitivity_matrix(trades_df, rules, all_sessions=None, risk_multipliers=[0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0]):
     """
-    Evaluates Pass Rate, Payout Rate, and Net EV across different risk scalers.
+    Evaluates Pass Rate, Cadence, and Net EV across different risk scalers.
     """
     matrix = []
+    base_risk = trades_df['actual_risk_usd'].mean() if ('actual_risk_usd' in trades_df.columns and len(trades_df) > 0) else 250.0
+    
     for r in risk_multipliers:
         sim = run_monte_carlo_prop_simulation(
             trades_df,
             rules,
             eval_risk_scaler=r,
-            funded_risk_scaler=max(0.25, r * 0.5), # Scale down at funded
-            num_simulations=500
+            funded_risk_scaler=max(0.25, r * 0.5),
+            num_simulations=500,
+            all_sessions=all_sessions
         )
         if sim:
             matrix.append({
-                'Risk Scaler': f"{r:.2f}x",
-                'Pass Rate (%)': f"{sim['pass_rate_pct']:.1f}%",
-                'Median Days': f"{sim['median_days_to_pass']:.0f}",
-                'Funded Payout Rate (%)': f"{sim['funded_stage_payout_rate_pct']:.1f}%",
-                'Avg Payout ($)': f"${sim['avg_payouts_usd']:,.2f}",
-                'Net EV per Challenge ($)': f"${sim['net_ev_per_challenge']:+,.2f}"
+                'Risk Scaler': f"{r:.2f}x (${base_risk * r:,.0f}/trade)",
+                '60-Day Pass Rate': f"{sim['realistic_challenge_pass_rate_pct']:.1f}%",
+                'Open-Ended Pass': f"{sim['unbounded_pass_rate_pct']:.1f}%",
+                'Est. Months': f"{sim['est_calendar_months_to_pass']:.1f} mos",
+                'Funded Payout Rate': f"{sim['funded_stage_payout_rate_pct']:.1f}%",
+                'Avg Payout': f"${sim['avg_payouts_usd']:,.2f}",
+                'Net EV': f"${sim['net_ev_per_challenge']:+,.2f}"
             })
     return pd.DataFrame(matrix)
