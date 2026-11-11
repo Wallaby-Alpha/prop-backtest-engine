@@ -67,6 +67,28 @@ if selected_strat == "Value Area Reclaim":
         "poc": "POC Only (Conservative)",
         "scale_50_50": "50% at POC + 50% at VAH/VAL"
     }[x])
+    strat_params["ny_open_filter"] = st.sidebar.selectbox(
+        "NY Open Context (09:30 ET)",
+        options=["none", "outside_range", "outside_va"],
+        index=0,
+        format_func=lambda x: {
+            "none": "Any Open Context",
+            "outside_range": "Open Outside Prior Range (Gap)",
+            "outside_va": "Open Outside Prior Value Area"
+        }[x],
+        help="Only triggers setups if 09:30 ET Open was outside yesterday's Range or Value Area."
+    )
+    strat_params["trend_filter"] = st.sidebar.selectbox(
+        "Higher Timeframe Trend Filter",
+        options=["none", "daily_ema50", "daily_ema200"],
+        index=0,
+        format_func=lambda x: {
+            "none": "No Trend Filter (Both Long & Short)",
+            "daily_ema50": "Daily 50 EMA (Long > 50 EMA, Short < 50 EMA)",
+            "daily_ema200": "Daily 200 EMA (Long > 200 EMA, Short < 200 EMA)"
+        }[x],
+        help="Filters out counter-trend trades relative to prior day's completed Daily EMA."
+    )
     strat_params["stop_loss_buffer_atr"] = st.sidebar.slider("Stop Loss ATR Buffer", 0.0, 2.0, 0.5, 0.25)
     strat_params["require_vol_surge"] = st.sidebar.checkbox("Require Volume Surge (> SMA)", value=False)
     strat_params["eod_exit_time"] = st.sidebar.text_input("EOD Flat Time (ET)", value="15:55")

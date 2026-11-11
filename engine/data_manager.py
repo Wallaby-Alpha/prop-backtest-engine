@@ -75,6 +75,14 @@ def load_asset_data(symbol="MNQ", timeframe="15m"):
     df['atr14'] = tr.rolling(14).mean().bfill()
     df['vol_sma20'] = df['volume'].rolling(20).mean().bfill()
     
+    # Higher Timeframe Trend Filters: Daily 50 EMA & Daily 200 EMA
+    # Strictly shifted by 1 to ensure day D only uses completed EMA of day D-1 (zero lookahead)
+    daily_closes = df.groupby('session_date_et')['close'].last()
+    d_ema50 = daily_closes.ewm(span=50, adjust=False).mean().shift(1)
+    d_ema200 = daily_closes.ewm(span=200, adjust=False).mean().shift(1)
+    df['daily_ema50'] = df['session_date_et'].map(d_ema50).bfill()
+    df['daily_ema200'] = df['session_date_et'].map(d_ema200).bfill()
+    
     return df, spec
 
 def compute_daily_volume_profiles(df, value_area_pct=0.70, num_bins=60):

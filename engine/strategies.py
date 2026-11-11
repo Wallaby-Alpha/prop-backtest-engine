@@ -43,6 +43,10 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
     require_vol_surge = params.get("require_vol_surge", False)
     eod_time = params.get("eod_exit_time", "15:55")
     
+    # Advanced Filters
+    ny_open_filter = params.get("ny_open_filter", "none") # 'none', 'outside_range', 'outside_va'
+    trend_filter = params.get("trend_filter", "none")     # 'none', 'daily_ema50', 'daily_ema200'
+    
     dates = sorted(list(daily_profiles.keys()))
     prior_profiles = {dates[i]: daily_profiles[dates[i - 1]] for i in range(1, len(dates))}
     
@@ -57,6 +61,9 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
     times = df['time_str'].values
     dates_arr = df['session_date_et'].values if 'session_date_et' in df.columns else df['date_et'].values
     timestamps = df.index
+    
+    ema50_arr = df['daily_ema50'].values if 'daily_ema50' in df.columns else np.zeros(n)
+    ema200_arr = df['daily_ema200'].values if 'daily_ema200' in df.columns else np.zeros(n)
     
     signals = [] # list of trade events
     
@@ -74,6 +81,7 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
     probe_low = 0.0
     probe_high = 0.0
     curr_day = None
+    ny_open_price = None
     
     for i in range(1, n):
         d = dates_arr[i]
@@ -86,14 +94,21 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
             was_above_vah = False
             probe_low = 1e9
             probe_high = -1e9
+            ny_open_price = None
             
         p_prof = prior_profiles[d]
         val = p_prof['val']
         vah = p_prof['vah']
         poc = p_prof['poc']
+        p_r_high = p_prof.get('range_high', vah)
+        p_r_low = p_prof.get('range_low', val)
         
         t_str = times[i]
         o, h, l, c, v, vs, a = opens[i], highs[i], lows[i], closes[i], volumes[i], vol_smas[i], atrs[i]
+        
+        # Track 09:30 ET New York Open Price
+        if "09:30" <= t_str <= "09:45" and ny_open_price is None:
+            ny_open_price = o
         
         # Track outer probes
         if l < val:
@@ -210,8 +225,23 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
             if require_vol_surge and (v < vs):
                 continue
                 
+            # Check NY Open context filter
+            if ny_open_filter == "outside_range":
+                if ny_open_price is None or (p_r_low <= ny_open_price <= p_r_high):
+                    continue
+            elif ny_open_filter == "outside_va":
+                if ny_open_price is None or (val <= ny_open_price <= vah):
+                    continue
+                
             # Long Setup: Probed below VAL, then candle closes back inside > VAL
             if was_below_val and (c > val) and (closes[i - 1] <= val):
+                if trend_filter == "daily_ema50" and c <= ema50_arr[i]:
+                    was_below_val = False
+                    continue
+                if trend_filter == "daily_ema200" and c <= ema200_arr[i]:
+                    was_below_val = False
+                    continue
+                    
                 in_pos = True
                 pos_side = 1
                 entry_price = c
@@ -224,6 +254,13 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
                 
             # Short Setup: Probed above VAH, then candle closes back inside < VAH
             elif was_above_vah and (c < vah) and (closes[i - 1] >= vah):
+                if trend_filter == "daily_ema50" and c >= ema50_arr[i]:
+                    was_above_vah = False
+                    continue
+                if trend_filter == "daily_ema200" and c >= ema200_arr[i]:
+                    was_above_vah = False
+                    continue
+                    
                 in_pos = True
                 pos_side = -1
                 entry_price = c
