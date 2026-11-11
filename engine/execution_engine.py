@@ -18,7 +18,10 @@ def process_trades(
     if signals_df is None or len(signals_df) == 0:
         return pd.DataFrame(), {}
         
-    df = signals_df.copy()
+    if isinstance(signals_df, list):
+        df = pd.DataFrame(signals_df)
+    else:
+        df = signals_df.copy()
     mult = spec["multiplier"]
     slip = slippage_pts if slippage_pts is not None else spec["default_slippage_pts"]
     comm = commission_per_side if commission_per_side is not None else spec["default_commission"]
