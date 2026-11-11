@@ -34,24 +34,31 @@ def process_trades(
     
     # Stop distance in points (if available)
     if 'stop_price' in df.columns:
-        stop_dist = (df['entry_price'] - df['stop_price']).abs()
+        stop_dist = (pd.to_numeric(df['entry_price'], errors='coerce') - pd.to_numeric(df['stop_price'], errors='coerce')).abs()
     else:
         stop_dist = pd.Series(25.0, index=df.index)
         
+    # Safeguard against any missing, NaN, or non-positive stop distances
+    stop_dist = pd.to_numeric(stop_dist, errors='coerce').fillna(25.0)
+    stop_dist = np.where(stop_dist <= 0, 25.0, stop_dist)
+        
     risk_pts = stop_dist + (2 * slip)
     risk_per_1c = (risk_pts * mult) + (2 * comm)
+    risk_per_1c = np.maximum(1.0, np.nan_to_num(risk_per_1c, nan=50.0))
     
     # Position Sizing: Concrete Dollar Risk vs Fixed Contracts
     if sizing_mode == "dollar_risk":
-        c_calc = np.floor(dollar_risk_per_trade / np.maximum(1e-5, risk_per_1c)).astype(int)
-        df['contracts'] = np.maximum(1, c_calc)
-        df['intended_risk_usd'] = dollar_risk_per_trade
+        target_risk = float(dollar_risk_per_trade) if dollar_risk_per_trade else 250.0
+        c_calc = np.floor(target_risk / risk_per_1c)
+        c_calc = np.nan_to_num(c_calc, nan=1.0)
+        df['contracts'] = np.maximum(1, c_calc.astype(int))
+        df['intended_risk_usd'] = target_risk
         df['actual_risk_usd'] = df['contracts'] * risk_per_1c
     else:
         c_fixed = int(contracts) if contracts else 1
-        df['contracts'] = c_fixed
-        df['intended_risk_usd'] = c_fixed * risk_per_1c
-        df['actual_risk_usd'] = c_fixed * risk_per_1c
+        df['contracts'] = max(1, c_fixed)
+        df['intended_risk_usd'] = df['contracts'] * risk_per_1c
+        df['actual_risk_usd'] = df['contracts'] * risk_per_1c
         
     # Dollar P&L
     if spec["type"] == "futures":

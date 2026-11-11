@@ -341,6 +341,7 @@ def orb_strategy(df, daily_profiles, params):
                 signals.append({
                     'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                     'entry_price': entry_price, 'exit_price': closes[i],
+                    'stop_price': stop_price,
                     'side': 'LONG' if pos_side == 1 else 'SHORT',
                     'bars': held, 'exit_reason': 'EOD_FLAT', 'date': d
                 })
@@ -352,6 +353,7 @@ def orb_strategy(df, daily_profiles, params):
                     signals.append({
                         'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                         'entry_price': entry_price, 'exit_price': stop_price,
+                        'stop_price': stop_price,
                         'side': 'LONG', 'bars': held, 'exit_reason': 'STOP_LOSS', 'date': d
                     })
                     in_pos = False
@@ -359,6 +361,7 @@ def orb_strategy(df, daily_profiles, params):
                     signals.append({
                         'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                         'entry_price': entry_price, 'exit_price': target_price,
+                        'stop_price': stop_price,
                         'side': 'LONG', 'bars': held, 'exit_reason': 'TARGET_HIT', 'date': d
                     })
                     in_pos = False
@@ -367,6 +370,7 @@ def orb_strategy(df, daily_profiles, params):
                     signals.append({
                         'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                         'entry_price': entry_price, 'exit_price': stop_price,
+                        'stop_price': stop_price,
                         'side': 'SHORT', 'bars': held, 'exit_reason': 'STOP_LOSS', 'date': d
                     })
                     in_pos = False
@@ -374,6 +378,7 @@ def orb_strategy(df, daily_profiles, params):
                     signals.append({
                         'entry_time': timestamps[entry_idx], 'exit_time': timestamps[i],
                         'entry_price': entry_price, 'exit_price': target_price,
+                        'stop_price': stop_price,
                         'side': 'SHORT', 'bars': held, 'exit_reason': 'TARGET_HIT', 'date': d
                     })
                     in_pos = False
