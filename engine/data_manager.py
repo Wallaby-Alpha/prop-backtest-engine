@@ -6,6 +6,35 @@ import pytz
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data_cache")
 
+def normalize_time_str(val, default="10:00"):
+    """
+    Normalizes arbitrary human time inputs to standard 24h 'HH:MM' string.
+    Examples:
+      '9:40'    -> '09:40'
+      '9:40 am' -> '09:40'
+      '9:40am'  -> '09:40'
+      '9'       -> '09:00'
+      '10am'    -> '10:00'
+      '3:55 pm' -> '15:55'
+    """
+    if not val or not isinstance(val, str):
+        return default
+    v = val.strip().lower()
+    is_pm = "pm" in v
+    is_am = "am" in v
+    v = v.replace("am", "").replace("pm", "").strip()
+    parts = v.split(":")
+    try:
+        h = int(parts[0])
+        m = int(parts[1]) if len(parts) >= 2 else 0
+        if is_pm and h < 12:
+            h += 12
+        elif is_am and h == 12:
+            h = 0
+        return f"{h:02d}:{m:02d}"
+    except (ValueError, TypeError):
+        return default
+
 ASSET_SPECS = {
     "MNQ": {
         "name": "Micro E-mini Nasdaq-100 Futures",

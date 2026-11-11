@@ -5,7 +5,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 
-from engine.data_manager import load_asset_data, compute_daily_volume_profiles, split_in_sample_out_sample, ASSET_SPECS
+from engine.data_manager import load_asset_data, compute_daily_volume_profiles, split_in_sample_out_sample, ASSET_SPECS, normalize_time_str
 from engine.strategies import StrategyRegistry
 from engine.execution_engine import process_trades
 from engine.prop_simulator import PROP_PRESETS, run_monte_carlo_prop_simulation, calculate_risk_sensitivity_matrix
@@ -95,9 +95,11 @@ ai_p = ai_conf.get("params", {}) if ai_conf else {}
 if selected_strat == "Value Area Reclaim":
     col_t1, col_t2 = st.sidebar.columns(2)
     with col_t1:
-        strat_params["start_time"] = st.text_input("Start Time (ET)", value=ai_p.get("start_time", "10:00"))
+        raw_start = st.text_input("Start Time (ET)", value=ai_p.get("start_time", "10:00"))
+        strat_params["start_time"] = normalize_time_str(raw_start, default="10:00")
     with col_t2:
-        strat_params["end_time"] = st.text_input("End Time (ET)", value=ai_p.get("end_time", "12:00"))
+        raw_end = st.text_input("End Time (ET)", value=ai_p.get("end_time", "12:00"))
+        strat_params["end_time"] = normalize_time_str(raw_end, default="12:00")
         
     target_modes = ["opposite_va", "poc", "scale_50_50"]
     target_idx = target_modes.index(ai_p.get("target_mode", "opposite_va")) if ai_p.get("target_mode") in target_modes else 0
@@ -136,17 +138,22 @@ if selected_strat == "Value Area Reclaim":
     )
     strat_params["stop_loss_buffer_atr"] = st.sidebar.slider("Stop Loss ATR Buffer", 0.0, 2.0, float(ai_p.get("stop_loss_buffer_atr", 0.5)), 0.25)
     strat_params["require_vol_surge"] = st.sidebar.checkbox("Require Volume Surge (> SMA)", value=bool(ai_p.get("require_vol_surge", False)))
-    strat_params["eod_exit_time"] = st.sidebar.text_input("EOD Flat Time (ET)", value=ai_p.get("eod_exit_time", "15:55"))
+    raw_eod = st.sidebar.text_input("EOD Flat Time (ET)", value=ai_p.get("eod_exit_time", "15:55"))
+    strat_params["eod_exit_time"] = normalize_time_str(raw_eod, default="15:55")
 
 elif selected_strat == "Opening Range Breakout (ORB)":
     col_o1, col_o2 = st.sidebar.columns(2)
     with col_o1:
-        strat_params["orb_start"] = st.text_input("ORB Start (ET)", value=ai_p.get("orb_start", "09:30"))
+        raw_orb_start = st.text_input("ORB Start (ET)", value=ai_p.get("orb_start", "09:30"))
+        strat_params["orb_start"] = normalize_time_str(raw_orb_start, default="09:30")
     with col_o2:
-        strat_params["orb_end"] = st.text_input("ORB End (ET)", value=ai_p.get("orb_end", "10:00"))
-    strat_params["trade_end"] = st.sidebar.text_input("Entry Window End (ET)", value=ai_p.get("trade_end", "12:00"))
+        raw_orb_end = st.text_input("ORB End (ET)", value=ai_p.get("orb_end", "10:00"))
+        strat_params["orb_end"] = normalize_time_str(raw_orb_end, default="10:00")
+    raw_trade_end = st.sidebar.text_input("Entry Window End (ET)", value=ai_p.get("trade_end", "12:00"))
+    strat_params["trade_end"] = normalize_time_str(raw_trade_end, default="12:00")
     strat_params["r_target_mult"] = st.sidebar.slider("Target (R-Multiple)", 1.0, 5.0, float(ai_p.get("r_target_mult", 2.0)), 0.5)
-    strat_params["eod_exit_time"] = st.sidebar.text_input("EOD Flat Time (ET)", value=ai_p.get("eod_exit_time", "15:55"))
+    raw_orb_eod = st.sidebar.text_input("EOD Flat Time (ET)", value=ai_p.get("eod_exit_time", "15:55"))
+    strat_params["eod_exit_time"] = normalize_time_str(raw_orb_eod, default="15:55")
 
 # 3. Prop Firm Settings
 st.sidebar.subheader("3. Prop Firm Optimization")

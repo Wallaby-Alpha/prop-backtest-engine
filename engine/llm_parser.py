@@ -170,6 +170,8 @@ def parse_with_rule_fallback(user_text):
         "explanation": f"Configured {strat} on {asset} ({tf}) with target '{params.get('target_mode', '2R')}', NY Open filter: '{params.get('ny_open_filter', 'none')}', Trend filter: '{params.get('trend_filter', 'none')}'."
     }
 
+from engine.data_manager import normalize_time_str
+
 def sanitize_and_validate_config(config_dict):
     """
     STRICT IMMUTABILITY GUARDRAIL:
@@ -190,6 +192,9 @@ def sanitize_and_validate_config(config_dict):
         # Type & constraint checking
         if spec["type"] == "str":
             val = str(val)
+            # If this is a time string field, normalize it first (handles '9:40', '9:40 am', etc.)
+            if "pattern" in spec and spec["pattern"] == r"^\d{2}:\d{2}$":
+                val = normalize_time_str(val, default=spec["default"])
             if "options" in spec and val not in spec["options"]:
                 val = spec["default"]
             if "pattern" in spec and not re.match(spec["pattern"], val):

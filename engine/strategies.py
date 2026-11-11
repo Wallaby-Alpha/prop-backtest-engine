@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from engine.data_manager import normalize_time_str
 
 class StrategyRegistry:
     _strategies = {}
@@ -36,12 +37,12 @@ def value_area_reclaim_strategy(df, daily_profiles, params):
       - require_vol_surge: bool, require volume > 20-period volume SMA on reclaim bar
       - eod_exit_time: str, "HH:MM" in ET (e.g. "15:55")
     """
-    start_time = params.get("start_time", "10:00")
-    end_time = params.get("end_time", "12:00")
+    start_time = normalize_time_str(params.get("start_time", "10:00"), default="10:00")
+    end_time = normalize_time_str(params.get("end_time", "12:00"), default="12:00")
     target_mode = params.get("target_mode", "opposite_va")
     stop_buffer_atr = params.get("stop_loss_buffer_atr", 0.5)
     require_vol_surge = params.get("require_vol_surge", False)
-    eod_time = params.get("eod_exit_time", "15:55")
+    eod_time = normalize_time_str(params.get("eod_exit_time", "15:55"), default="15:55")
     
     # Advanced Filters
     ny_open_filter = params.get("ny_open_filter", "none") # 'none', 'outside_range', 'outside_va'
@@ -279,11 +280,11 @@ def orb_strategy(df, daily_profiles, params):
     """
     Opening Range Breakout Strategy (e.g. 09:30 - 10:00 ET).
     """
-    orb_start = params.get("orb_start", "09:30")
-    orb_end = params.get("orb_end", "10:00")
-    trade_end = params.get("trade_end", "12:00")
+    orb_start = normalize_time_str(params.get("orb_start", "09:30"), default="09:30")
+    orb_end = normalize_time_str(params.get("orb_end", "10:00"), default="10:00")
+    trade_end = normalize_time_str(params.get("trade_end", "12:00"), default="12:00")
     r_mult = params.get("r_target_mult", 2.0)
-    eod_time = params.get("eod_exit_time", "15:55")
+    eod_time = normalize_time_str(params.get("eod_exit_time", "15:55"), default="15:55")
     
     n = len(df)
     closes = df['close'].values
